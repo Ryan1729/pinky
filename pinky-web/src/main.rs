@@ -511,9 +511,6 @@ fn handle_error< E: Into< Box< Error > > >( error: E ) {
     web::document().get_element_by_id( "error-description" ).unwrap().set_text_content( &error_message );
 
     hide( "viewport" );
-    hide( "change-rom-button" );
-    hide( "rom-menu-close" );
-    show( "change-rom-menu" );
     show( "error" );
 }
 
@@ -525,7 +522,6 @@ fn main() {
 
     support_input( pinky.clone() );
 
-    hide( "side-text" );
     hide( "loading" );
     hide( "error" );
 
