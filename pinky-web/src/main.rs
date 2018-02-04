@@ -4,8 +4,6 @@
 extern crate stdweb;
 extern crate nes;
 
-#[macro_use]
-extern crate serde_derive;
 extern crate serde;
 
 use std::cell::RefCell;
@@ -26,7 +24,6 @@ use stdweb::web::{
 use stdweb::web::event::{
     IEvent,
     IKeyboardEvent,
-    ClickEvent,
     KeydownEvent,
     KeyupEvent,
     KeyboardLocation
@@ -531,38 +528,24 @@ fn main() {
     let canvas = web::document().get_element_by_id( "viewport" ).unwrap();
     let pinky = Rc::new( RefCell::new( PinkyWeb::new( &canvas ) ) );
 
-    let entries = web::document().get_element_by_id( "rom-list" ).unwrap();
-    let entry = web::document().create_element( "button" );
-    let name = "Mad Wizard";
-    let file = "mad_wizard.nes";
-
-    entry.set_text_content( &name );
-    entries.append_child( &entry );
-    entry.add_event_listener( enclose!( [pinky] move |_: ClickEvent| {
-        hide( "change-rom-menu" );
-        hide( "side-text" );
-        show( "loading" );
-
-        let builtin_rom_loaded = Once( enclose!( [pinky] move |array_buffer: ArrayBuffer| {
-            let rom_data: Vec< u8 > = array_buffer.into();
-            load_rom( &pinky, &rom_data );
-        }));
-        js! {
-            var req = new XMLHttpRequest();
-            req.addEventListener( "load" , function() {
-                @{builtin_rom_loaded}( req.response );
-            });
-            req.open( "GET", "roms/" + @{&file} );
-            req.responseType = "arraybuffer";
-            req.send();
-        }
-    }));
-
-    hide( "loading" );
-    show( "change-rom-menu" );
-
     support_input( pinky.clone() );
 
+    hide( "side-text" );
+
+    let builtin_rom_loaded = Once( enclose!( [pinky] move |array_buffer: ArrayBuffer| {
+        let rom_data: Vec< u8 > = array_buffer.into();
+        load_rom( &pinky, &rom_data );
+    }));
+    js! {
+        var req = new XMLHttpRequest();
+        req.addEventListener( "load" , function() {
+            @{builtin_rom_loaded}( req.response );
+        });
+        req.open( "GET", "roms/mad_wizard.nes" );
+        req.responseType = "arraybuffer";
+        req.send();
+    }
+    
     web::window().request_animation_frame( move |_| {
         main_loop( pinky );
     });
