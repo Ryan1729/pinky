@@ -10,7 +10,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::ops::DerefMut;
 use std::error::Error;
-use std::slice;
 
 use stdweb::web::{
     self,
@@ -39,22 +38,8 @@ macro_rules! enclose {
     };
 }
 
-fn palette_to_abgr( palette: &nes::Palette ) -> [u32; 64] {
-    let mut output = [0; 64];
-    for (index, out) in output.iter_mut().enumerate() {
-        let (r, g, b) = palette.get_rgb( index as u8 );
-        *out = ((b as u32) << 16) |
-               ((g as u32) <<  8) |
-               ((r as u32)      ) |
-               0xFF000000;
-    }
-
-    output
-}
-
 struct PinkyWeb {
     state: State,
-    palette: [u32; 64],
     framebuffer: [u32; 256 * 240],
     audio_chunk_counter: u32,
     audio_underrun: Option< usize >,
@@ -221,35 +206,6 @@ impl Framebuffer {
     fn new() -> Framebuffer {
         Framebuffer::default()
     }
-
-    pub fn iter< 'a >( &'a self ) -> FramebufferIterator< 'a > {
-        FramebufferIterator {
-            iter: self.buffer.iter()
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct FramebufferPixel( u16 );
-
-impl FramebufferPixel {
-    #[inline]
-    pub fn color_in_system_palette_index( &self ) -> u8 {
-        (self.0 & 0xFF) as u8
-    }
-}
-
-pub struct FramebufferIterator< 'a > {
-    iter: slice::Iter< 'a, u16 >
-}
-
-impl< 'a > Iterator for FramebufferIterator< 'a > {
-    type Item = FramebufferPixel;
-
-    #[inline]
-    fn next( &mut self ) -> Option< Self::Item > {
-        self.iter.next().map( |&raw_pixel| FramebufferPixel( raw_pixel ) )
-    }
 }
 
 impl Default for Framebuffer {
@@ -272,7 +228,7 @@ impl State {
         let mut framebuffer = Framebuffer::new();
         
         for i in 0..framebuffer.buffer.len() {
-            framebuffer.buffer[i] = i as u16 & 0x3F;
+            framebuffer.buffer[i] = i as _;
         }
         
         State {
@@ -315,7 +271,6 @@ impl PinkyWeb {
 
         PinkyWeb {
             state: State::new(),
-            palette: palette_to_abgr( &nes::Palette::default() ),
             framebuffer: [0; 256 * 240],
             audio_chunk_counter: 0,
             audio_underrun: None,
@@ -369,11 +324,21 @@ impl PinkyWeb {
         }
     }
 
+    #[inline]
+    fn beside(x: u32) -> u32 {
+        x | x << 4
+    }
+    
     fn draw( &mut self ) {
         let framebuffer = &self.state.framebuffer;
         if !self.paused {
-            for (pixel_in, pixel_out) in framebuffer.iter().zip( self.framebuffer.iter_mut() ) {
-                *pixel_out = self.palette[ pixel_in.color_in_system_palette_index() as usize ];
+            for (pixel_in, pixel_out) in framebuffer.buffer.iter().zip( self.framebuffer.iter_mut() ) {
+                let r = Self::beside(((pixel_in & 0x000F) >> 0) as u32);
+                let g = Self::beside(((pixel_in & 0x00F0) >> 4) as u32);
+                let b = Self::beside(((pixel_in & 0x0F00) >> 8) as u32);
+                let a = Self::beside(((pixel_in & 0xF000) >> 12) as u32);
+                
+                *pixel_out = r | g << 8 | b << 16 | a << 24
             }
         }
 
