@@ -496,53 +496,33 @@ fn hide( id: &str ) {
     web::document().get_element_by_id( id ).unwrap().class_list().add( "hidden" );
 }
 
-fn fetch_builtin_rom_list< F: FnOnce( Vec< RomEntry > ) + 'static >( callback: F ) {
-    let on_rom_list_loaded = Once( move |mut roms: Vec< RomEntry >| {
-        roms.sort_by( |a, b| a.name.cmp( &b.name ) );
-        callback( roms );
-    });
-
-    js! {
-        var req = new XMLHttpRequest();
-        req.addEventListener( "load" , function() {
-            var cb = @{on_rom_list_loaded};
-            cb( JSON.parse( req.responseText ) );
-            cb.drop();
-        });
-        req.open( "GET", "roms/index.json" );
-        req.send();
-    }
-}
-
-fn support_builtin_roms( roms: Vec< RomEntry >, pinky: Rc< RefCell< PinkyWeb > > ) {
+fn support_builtin_roms( pinky: Rc< RefCell< PinkyWeb > > ) {
     let entries = web::document().get_element_by_id( "rom-list" ).unwrap();
-    for rom in roms {
-        let entry = web::document().create_element( "button" );
-        let name = rom.name;
-        let file = rom.file;
+    let entry = web::document().create_element( "button" );
+    let name = "Mad Wizard";
+    let file = "mad_wizard.nes";
 
-        entry.set_text_content( &name );
-        entries.append_child( &entry );
-        entry.add_event_listener( enclose!( [pinky] move |_: ClickEvent| {
-            hide( "change-rom-menu" );
-            hide( "side-text" );
-            show( "loading" );
+    entry.set_text_content( &name );
+    entries.append_child( &entry );
+    entry.add_event_listener( enclose!( [pinky] move |_: ClickEvent| {
+        hide( "change-rom-menu" );
+        hide( "side-text" );
+        show( "loading" );
 
-            let builtin_rom_loaded = Once( enclose!( [pinky] move |array_buffer: ArrayBuffer| {
-                let rom_data: Vec< u8 > = array_buffer.into();
-                load_rom( &pinky, &rom_data );
-            }));
-            js! {
-                var req = new XMLHttpRequest();
-                req.addEventListener( "load" , function() {
-                    @{builtin_rom_loaded}( req.response );
-                });
-                req.open( "GET", "roms/" + @{&file} );
-                req.responseType = "arraybuffer";
-                req.send();
-            }
+        let builtin_rom_loaded = Once( enclose!( [pinky] move |array_buffer: ArrayBuffer| {
+            let rom_data: Vec< u8 > = array_buffer.into();
+            load_rom( &pinky, &rom_data );
         }));
-    }
+        js! {
+            var req = new XMLHttpRequest();
+            req.addEventListener( "load" , function() {
+                @{builtin_rom_loaded}( req.response );
+            });
+            req.open( "GET", "roms/" + @{&file} );
+            req.responseType = "arraybuffer";
+            req.send();
+        }
+    }));
 }
 
 fn support_custom_roms( pinky: Rc< RefCell< PinkyWeb > > ) {
@@ -645,12 +625,10 @@ fn main() {
     support_custom_roms( pinky.clone() );
     support_rom_changing( pinky.clone() );
 
-    fetch_builtin_rom_list( enclose!( [pinky] |roms| {
-        support_builtin_roms( roms, pinky );
+    support_builtin_roms( pinky.clone() );
 
-        hide( "loading" );
-        show( "change-rom-menu" );
-    }));
+    hide( "loading" );
+    show( "change-rom-menu" );
 
     support_input( pinky.clone() );
 
