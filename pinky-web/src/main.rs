@@ -7,13 +7,9 @@ extern crate bitflags;
 
 #[macro_use]
 extern crate stdweb;
-extern crate nes;
-
-extern crate serde;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::ops::DerefMut;
 use std::error::Error;
 
 use stdweb::web::{
@@ -292,8 +288,6 @@ pub mod Button {
 struct PinkyWeb {
     state: State,
     framebuffer: [u32; 256 * 240],
-    audio_chunk_counter: u32,
-    audio_underrun: Option< usize >,
     paused: bool,
     busy: bool,
     js_ctx: Value
@@ -308,9 +302,6 @@ impl PinkyWeb {
             var canvas = @{canvas};
 
             h.gl = @{gl};
-            h.audio = new AudioContext();
-            h.empty_audio_buffers = [];
-            h.play_timestamp = 0;
 
             if( !h.gl ) {
                 console.log( "No WebGL; using Canvas API" );
@@ -334,8 +325,6 @@ impl PinkyWeb {
         PinkyWeb {
             state: State::new(),
             framebuffer: [0; 256 * 240],
-            audio_chunk_counter: 0,
-            audio_underrun: None,
             paused: true,
             busy: false,
             js_ctx
@@ -357,25 +346,17 @@ impl PinkyWeb {
         Ok ( true )
     }
 
-    // This will run the emulator either until we've finished
-    // a frame, or until we've generated one audio chunk,
-    // in which case we'll temporairly give back the control
-    // of the main thread back to the web browser so that
-    // it can handle other events and process audio.
     fn run_a_bit( &mut self ) -> Result< bool, Box< Error > > {
         if self.paused {
             return Ok( true );
         }
 
-        let audio_chunk_counter = self.audio_chunk_counter;
         loop {
             let result =  self.execute_cycle();
             match result {
                 Ok( processed_whole_frame ) => {
                     if processed_whole_frame {
                         return Ok( true );
-                    } else if self.audio_chunk_counter != audio_chunk_counter {
-                        return Ok( false );
                     }
                 },
                 Err( error ) => {
@@ -483,15 +464,6 @@ fn emulate_for_a_single_frame( pinky: Rc< RefCell< PinkyWeb > > ) {
             web::set_timeout( move || { emulate_for_a_single_frame( pinky ); }, 0 );
         } else {
             let mut pinky = pinky.borrow_mut();
-            if let Some( count ) = pinky.audio_underrun.take() {
-                for _ in 0..count {
-                    if let Err( error ) = pinky.run_a_bit() {
-                        handle_error( error );
-                        return;
-                    }
-                }
-            }
-
             pinky.busy = false;
         }
     }), 0 );
@@ -557,16 +529,10 @@ fn main() {
     hide( "loading" );
     hide( "error" );
 
-    {
-       let mut pinky = pinky.borrow_mut();
-       let pinky = pinky.deref_mut();
-
-        pinky.unpause();
-   }
+    pinky.borrow_mut().unpause();
 
     show( "viewport" );
 
-    
     web::window().request_animation_frame( move |_| {
         main_loop( pinky );
     });
