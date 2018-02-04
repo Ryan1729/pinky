@@ -6,6 +6,7 @@ authors = ["Jan Bujak <j@exia.io>"]
 [dependencies]
 serde = "1"
 serde_derive = "1"
+bitflags = "0.7"
 
 [dependencies.stdweb]
 version = "0.3"

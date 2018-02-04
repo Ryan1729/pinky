@@ -1,4 +1,9 @@
 #![recursion_limit="2048"]
+#![allow(non_upper_case_globals)]
+#![allow(non_snake_case)]
+
+#[macro_use]
+extern crate bitflags;
 
 #[macro_use]
 extern crate stdweb;
@@ -36,16 +41,6 @@ macro_rules! enclose {
             $y
         }
     };
-}
-
-struct PinkyWeb {
-    state: State,
-    framebuffer: [u32; 256 * 240],
-    audio_chunk_counter: u32,
-    audio_underrun: Option< usize >,
-    paused: bool,
-    busy: bool,
-    js_ctx: Value
 }
 
 // This creates a really basic WebGL context for blitting a single texture.
@@ -206,6 +201,12 @@ impl Framebuffer {
     fn new() -> Framebuffer {
         Framebuffer::default()
     }
+    
+    fn rainbow(&mut self, x: u8, y: u8) {
+        for i in 0..self.buffer.len() {
+            self.buffer[i] = (i + x as usize - (y as usize * 256)) as _;
+        }
+    }
 }
 
 impl Default for Framebuffer {
@@ -221,20 +222,81 @@ impl Default for Framebuffer {
 
 pub struct State {
     framebuffer: Framebuffer,
+    gamepad: Button::Ty,
+    x: u8,
+    y: u8,
 }
 
 impl State {
     pub fn new() -> State {
         let mut framebuffer = Framebuffer::new();
         
-        for i in 0..framebuffer.buffer.len() {
-            framebuffer.buffer[i] = i as _;
-        }
+        let x  = 128;
+        let y  = 120;
+        
+        framebuffer.rainbow(x,y);
         
         State {
             framebuffer,
+            gamepad: Button::Ty::empty(),
+            x,
+            y,
         }
     }
+    
+    fn frame(&mut self) {
+        if self.gamepad.contains( Button::Left ) {
+            self.x = self.x.wrapping_sub(1);
+        }
+        
+        if self.gamepad.contains( Button::Right ) {
+            self.x = self.x.wrapping_add(1);
+        }
+        
+        if self.gamepad.contains( Button::Up ) {
+            self.y = self.y.wrapping_sub(1);
+        }
+        
+        if self.gamepad.contains( Button::Down ) {
+            self.y = self.y.wrapping_add(1);
+        }
+    
+        self.framebuffer.rainbow(self.x, self.y);
+    }
+    
+    fn press( &mut self, button: Button::Ty ) {
+        self.gamepad.insert( button );
+    }
+
+    fn release( &mut self, button: Button::Ty ) {
+        self.gamepad.remove( button );
+    }
+}
+
+// These values are deliberately picked to be the same as the ones in NES' input registers.
+pub mod Button {
+    bitflags! {
+        pub flags Ty: u8 {
+            const A          = 1 << 0,
+            const B          = 1 << 1,
+            const Select     = 1 << 2,
+            const Start      = 1 << 3,
+            const Up         = 1 << 4,
+            const Down       = 1 << 5,
+            const Left       = 1 << 6,
+            const Right      = 1 << 7
+        }
+    }
+}
+
+struct PinkyWeb {
+    state: State,
+    framebuffer: [u32; 256 * 240],
+    audio_chunk_counter: u32,
+    audio_underrun: Option< usize >,
+    paused: bool,
+    busy: bool,
+    js_ctx: Value
 }
 
 impl PinkyWeb {
@@ -289,7 +351,9 @@ impl PinkyWeb {
         self.busy = false;
     }
     
-    fn execute_cycle( &self ) -> Result< bool, Box< Error > > {
+    fn execute_cycle( &mut self ) -> Result< bool, Box< Error > > {
+        self.state.frame();
+    
         Ok ( true )
     }
 
@@ -358,43 +422,48 @@ impl PinkyWeb {
 
     fn on_key( &mut self, key: &str, location: KeyboardLocation, is_pressed: bool ) -> bool {
         let button = match (key, location) {
-            ("Enter", _) => nes::Button::Start,
-            ("Shift", KeyboardLocation::Right) => nes::Button::Select,
-            ("ArrowUp", _) => nes::Button::Up,
-            ("ArrowLeft", _) => nes::Button::Left,
-            ("ArrowRight", _) => nes::Button::Right,
-            ("ArrowDown", _) => nes::Button::Down,
+            ("Enter", _) => Button::Start,
+            ("Shift", KeyboardLocation::Right) => Button::Select,
+            ("ArrowUp", _) => Button::Up,
+            ("ArrowLeft", _) => Button::Left,
+            ("ArrowRight", _) => Button::Right,
+            ("ArrowDown", _) => Button::Down,
 
             // On Edge the arrows have different names
             // for some reason.
-            ("Up", _) => nes::Button::Up,
-            ("Left", _) => nes::Button::Left,
-            ("Right", _) => nes::Button::Right,
-            ("Down", _) => nes::Button::Down,
+            ("Up", _) => Button::Up,
+            ("Left", _) => Button::Left,
+            ("Right", _) => Button::Right,
+            ("Down", _) => Button::Down,
 
-            ("z", _) => nes::Button::A,
-            ("x", _) => nes::Button::B,
+            ("z", _) => Button::A,
+            ("x", _) => Button::B,
 
             // For those using the Dvorak layout.
-            (";", _) => nes::Button::A,
-            ("q", _) => nes::Button::B,
+            (";", _) => Button::A,
+            ("q", _) => Button::B,
 
             // For those using the Dvorak layout **and** Microsoft Edge.
             //
             // On `keydown` we get ";" as we should, but on `keyup`
             // we get "Unidentified". Seriously Microsoft, how buggy can
             // your browser be?
-            ("Unidentified", _) if is_pressed == false => nes::Button::A,
+            ("Unidentified", _) if is_pressed == false => Button::A,
 
             _ => return false
         };
 
-        PinkyWeb::set_button_state( self, nes::ControllerPort::First, button, is_pressed );
+        PinkyWeb::set_button_state( self, button, is_pressed );
         return true;
     }
     
-    fn set_button_state( &mut self, _port: nes::ControllerPort, _button: nes::Button::Ty, _is_pressed: bool ) {
-        //TODO 
+    fn set_button_state( &mut self, button: Button::Ty, is_pressed: bool ) {
+        if is_pressed {
+            self.state.press(button);
+        } else {
+            self.state.release(button);
+        }
+        
     }
 }
 
