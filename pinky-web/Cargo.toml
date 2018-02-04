@@ -11,9 +11,6 @@ bitflags = "0.7"
 [dependencies.stdweb]
 version = "0.3"
 
-[dependencies.nes]
-path = "../nes"
-
 [profile.dev]
 opt-level = 2
 debug = true
