@@ -19,8 +19,6 @@ use stdweb::web::{
     IEventTarget,
     INode,
     IElement,
-    FileReader,
-    FileReaderResult,
     Element,
     ArrayBuffer
 };
@@ -29,14 +27,11 @@ use stdweb::web::event::{
     IEvent,
     IKeyboardEvent,
     ClickEvent,
-    ChangeEvent,
-    ProgressLoadEvent,
     KeydownEvent,
     KeyupEvent,
     KeyboardLocation
 };
 
-use stdweb::web::html_element::InputElement;
 use stdweb::unstable::TryInto;
 use stdweb::{Value, UnsafeTypedArray, Once};
 
@@ -480,97 +475,12 @@ fn main_loop( pinky: Rc< RefCell< PinkyWeb > > ) {
     });
 }
 
-#[derive(Deserialize)]
-struct RomEntry {
-    name: String,
-    file: String
-}
-
-js_deserializable!( RomEntry );
-
 fn show( id: &str ) {
     web::document().get_element_by_id( id ).unwrap().class_list().remove( "hidden" );
 }
 
 fn hide( id: &str ) {
     web::document().get_element_by_id( id ).unwrap().class_list().add( "hidden" );
-}
-
-fn support_builtin_roms( pinky: Rc< RefCell< PinkyWeb > > ) {
-    let entries = web::document().get_element_by_id( "rom-list" ).unwrap();
-    let entry = web::document().create_element( "button" );
-    let name = "Mad Wizard";
-    let file = "mad_wizard.nes";
-
-    entry.set_text_content( &name );
-    entries.append_child( &entry );
-    entry.add_event_listener( enclose!( [pinky] move |_: ClickEvent| {
-        hide( "change-rom-menu" );
-        hide( "side-text" );
-        show( "loading" );
-
-        let builtin_rom_loaded = Once( enclose!( [pinky] move |array_buffer: ArrayBuffer| {
-            let rom_data: Vec< u8 > = array_buffer.into();
-            load_rom( &pinky, &rom_data );
-        }));
-        js! {
-            var req = new XMLHttpRequest();
-            req.addEventListener( "load" , function() {
-                @{builtin_rom_loaded}( req.response );
-            });
-            req.open( "GET", "roms/" + @{&file} );
-            req.responseType = "arraybuffer";
-            req.send();
-        }
-    }));
-}
-
-fn support_custom_roms( pinky: Rc< RefCell< PinkyWeb > > ) {
-    let browse_for_roms_button = web::document().get_element_by_id( "browse-for-roms" ).unwrap();
-    browse_for_roms_button.add_event_listener( move |event: ChangeEvent| {
-        let input: InputElement = event.target().unwrap().try_into().unwrap();
-        let files = input.files().unwrap();
-        let file = match files.iter().next() {
-            Some( file ) => file,
-            None => return
-        };
-
-        hide( "change-rom-menu" );
-        hide( "side-text" );
-        show( "loading" );
-
-        let reader = FileReader::new();
-        reader.add_event_listener( enclose!( [pinky, reader] move |_: ProgressLoadEvent| {
-            let rom_data: Vec< u8 > = match reader.result().unwrap() {
-                FileReaderResult::ArrayBuffer( buffer ) => buffer,
-                _ => unreachable!()
-            }.into();
-
-            load_rom( &pinky, &rom_data );
-        }));
-
-        reader.read_as_array_buffer( &file );
-    });
-}
-
-fn support_rom_changing( pinky: Rc< RefCell< PinkyWeb > > ) {
-    let change_rom_button = web::document().get_element_by_id( "change-rom-button" ).unwrap();
-    change_rom_button.add_event_listener( enclose!( [pinky] move |_: ClickEvent| {
-        pinky.borrow_mut().pause();
-        hide( "viewport" );
-        hide( "change-rom-button" );
-        show( "change-rom-menu" );
-        show( "rom-menu-close" );
-    }));
-
-    let rom_menu_close_button = web::document().get_element_by_id( "rom-menu-close" ).unwrap();
-    rom_menu_close_button.add_event_listener( move |_: ClickEvent| {
-        pinky.borrow_mut().unpause();
-        show( "viewport" );
-        show( "change-rom-button" );
-        hide( "change-rom-menu" );
-        hide( "rom-menu-close" );
-    });
 }
 
 fn support_input( pinky: Rc< RefCell< PinkyWeb > > ) {
@@ -602,7 +512,6 @@ fn load_rom( pinky: &Rc< RefCell< PinkyWeb > >, rom_data: &[u8] ) {
     pinky.unpause();
 
     show( "viewport" );
-    show( "change-rom-button" );
 }
 
 fn handle_error< E: Into< Box< Error > > >( error: E ) {
@@ -622,10 +531,32 @@ fn main() {
     let canvas = web::document().get_element_by_id( "viewport" ).unwrap();
     let pinky = Rc::new( RefCell::new( PinkyWeb::new( &canvas ) ) );
 
-    support_custom_roms( pinky.clone() );
-    support_rom_changing( pinky.clone() );
+    let entries = web::document().get_element_by_id( "rom-list" ).unwrap();
+    let entry = web::document().create_element( "button" );
+    let name = "Mad Wizard";
+    let file = "mad_wizard.nes";
 
-    support_builtin_roms( pinky.clone() );
+    entry.set_text_content( &name );
+    entries.append_child( &entry );
+    entry.add_event_listener( enclose!( [pinky] move |_: ClickEvent| {
+        hide( "change-rom-menu" );
+        hide( "side-text" );
+        show( "loading" );
+
+        let builtin_rom_loaded = Once( enclose!( [pinky] move |array_buffer: ArrayBuffer| {
+            let rom_data: Vec< u8 > = array_buffer.into();
+            load_rom( &pinky, &rom_data );
+        }));
+        js! {
+            var req = new XMLHttpRequest();
+            req.addEventListener( "load" , function() {
+                @{builtin_rom_loaded}( req.response );
+            });
+            req.open( "GET", "roms/" + @{&file} );
+            req.responseType = "arraybuffer";
+            req.send();
+        }
+    }));
 
     hide( "loading" );
     show( "change-rom-menu" );
