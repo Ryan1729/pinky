@@ -269,8 +269,14 @@ pub struct State {
 
 impl State {
     pub fn new() -> State {
+        let mut framebuffer = Framebuffer::new();
+        
+        for i in 0..framebuffer.buffer.len() {
+            framebuffer.buffer[i] = i as u16 & 0x3F;
+        }
+        
         State {
-            framebuffer: Framebuffer::new(),
+            framebuffer,
         }
     }
 }
