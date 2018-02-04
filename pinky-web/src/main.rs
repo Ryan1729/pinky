@@ -9,16 +9,15 @@ extern crate serde;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::ops::DerefMut;
-use std::cmp::max;
 use std::error::Error;
+use std::slice;
 
 use stdweb::web::{
     self,
     IEventTarget,
     INode,
     IElement,
-    Element,
-    ArrayBuffer
+    Element
 };
 
 use stdweb::web::event::{
@@ -29,8 +28,7 @@ use stdweb::web::event::{
     KeyboardLocation
 };
 
-use stdweb::unstable::TryInto;
-use stdweb::{Value, UnsafeTypedArray, Once};
+use stdweb::{Value, UnsafeTypedArray};
 
 macro_rules! enclose {
     ( [$( $x:ident ),*] $y:expr ) => {
@@ -55,91 +53,14 @@ fn palette_to_abgr( palette: &nes::Palette ) -> [u32; 64] {
 }
 
 struct PinkyWeb {
-    state: nes::State,
+    state: State,
     palette: [u32; 64],
     framebuffer: [u32; 256 * 240],
-    audio_buffer: Vec< f32 >,
     audio_chunk_counter: u32,
     audio_underrun: Option< usize >,
     paused: bool,
     busy: bool,
     js_ctx: Value
-}
-
-impl nes::Context for PinkyWeb {
-    #[inline]
-    fn state_mut( &mut self ) -> &mut nes::State {
-        &mut self.state
-    }
-
-    #[inline]
-    fn state( &self ) -> &nes::State {
-        &self.state
-    }
-
-    // Ugh, trying to get gapless low-latency PCM playback
-    // out of the Web Audio APIs is like driving a rusty
-    // nail through my hand.
-    //
-    // This blog post probably sums it up pretty well:
-    //   http://blog.mecheye.net/2017/09/i-dont-know-who-the-web-audio-api-is-designed-for/
-    //
-    // So, this is not perfect, but it's as good as I can make it.
-    #[inline]
-    fn on_audio_sample( &mut self, sample: f32 ) {
-        self.audio_buffer.push( sample );
-        if self.audio_buffer.len() == 2048 {
-            self.audio_chunk_counter += 1;
-            let audio_buffered: f64 = js! {
-                var h = @{&self.js_ctx};
-                var samples = @{unsafe { UnsafeTypedArray::new( &self.audio_buffer ) }};
-                var sample_rate = 44100;
-                var sample_count = samples.length;
-                var latency = 0.032;
-
-                var audio_buffer;
-                if( h.empty_audio_buffers.length === 0 ) {
-                    audio_buffer = h.audio.createBuffer( 1, sample_count, sample_rate );
-                } else {
-                    audio_buffer = h.empty_audio_buffers.pop();
-                }
-
-                audio_buffer.getChannelData( 0 ).set( samples );
-
-                var node = h.audio.createBufferSource();
-                node.connect( h.audio.destination );
-                node.buffer = audio_buffer;
-                node.onended = function() {
-                    h.empty_audio_buffers.push( audio_buffer );
-                };
-
-                var buffered = h.play_timestamp - (h.audio.currentTime + latency);
-                var play_timestamp = Math.max( h.audio.currentTime + latency, h.play_timestamp );
-                node.start( play_timestamp );
-                h.play_timestamp = play_timestamp + sample_count / sample_rate;
-
-                return buffered;
-            }.try_into().unwrap();
-
-            // Since we're using `request_animation_frame` for synchronization
-            // we **will** go out of sync with the audio sooner or later,
-            // which will result in sudden, and very unpleasant, audio pops.
-            //
-            // So here we check how much audio exactly we have queued up,
-            // and if we don't have enough then we'll try to compensate
-            // by running the emulator for a few more cycles at the end
-            // of the current frame.
-            if audio_buffered < 0.000 {
-                self.audio_underrun = Some( max( self.audio_underrun.unwrap_or( 0 ), 3 ) );
-            } else if audio_buffered < 0.010 {
-                self.audio_underrun = Some( max( self.audio_underrun.unwrap_or( 0 ), 2 ) );
-            } else if audio_buffered < 0.020 {
-                self.audio_underrun = Some( max( self.audio_underrun.unwrap_or( 0 ), 1 ) );
-            }
-
-            self.audio_buffer.clear();
-        }
-    }
 }
 
 // This creates a really basic WebGL context for blitting a single texture.
@@ -284,6 +205,76 @@ fn setup_webgl( canvas: &Element ) -> Value {
     )
 }
 
+pub struct Framebuffer {
+    buffer: Vec< u16 >
+}
+
+impl PartialEq for Framebuffer {
+    fn eq( &self, other: &Framebuffer ) -> bool {
+        &self.buffer[..] == &other.buffer[..]
+    }
+}
+
+impl Eq for Framebuffer {}
+
+impl Framebuffer {
+    fn new() -> Framebuffer {
+        Framebuffer::default()
+    }
+
+    pub fn iter< 'a >( &'a self ) -> FramebufferIterator< 'a > {
+        FramebufferIterator {
+            iter: self.buffer.iter()
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct FramebufferPixel( u16 );
+
+impl FramebufferPixel {
+    #[inline]
+    pub fn color_in_system_palette_index( &self ) -> u8 {
+        (self.0 & 0xFF) as u8
+    }
+}
+
+pub struct FramebufferIterator< 'a > {
+    iter: slice::Iter< 'a, u16 >
+}
+
+impl< 'a > Iterator for FramebufferIterator< 'a > {
+    type Item = FramebufferPixel;
+
+    #[inline]
+    fn next( &mut self ) -> Option< Self::Item > {
+        self.iter.next().map( |&raw_pixel| FramebufferPixel( raw_pixel ) )
+    }
+}
+
+impl Default for Framebuffer {
+    fn default() -> Self {
+        let mut buffer = Vec::new();
+        buffer.resize( 256 * 240, 0 );
+
+        Framebuffer {
+            buffer
+        }
+    }
+}
+
+pub struct State {
+    framebuffer: Framebuffer,
+}
+
+impl State {
+    pub fn new() -> State {
+        State {
+            framebuffer: Framebuffer::new(),
+        }
+    }
+}
+
 impl PinkyWeb {
     fn new( canvas: &Element ) -> Self {
         let gl = setup_webgl( &canvas );
@@ -317,10 +308,9 @@ impl PinkyWeb {
         );
 
         PinkyWeb {
-            state: nes::State::new(),
+            state: State::new(),
             palette: palette_to_abgr( &nes::Palette::default() ),
             framebuffer: [0; 256 * 240],
-            audio_buffer: Vec::with_capacity( 44100 ),
             audio_chunk_counter: 0,
             audio_underrun: None,
             paused: true,
@@ -337,6 +327,10 @@ impl PinkyWeb {
         self.paused = false;
         self.busy = false;
     }
+    
+    fn execute_cycle( &self ) -> Result< bool, Box< Error > > {
+        Ok ( true )
+    }
 
     // This will run the emulator either until we've finished
     // a frame, or until we've generated one audio chunk,
@@ -350,7 +344,7 @@ impl PinkyWeb {
 
         let audio_chunk_counter = self.audio_chunk_counter;
         loop {
-            let result = nes::Interface::execute_cycle( self );
+            let result =  self.execute_cycle();
             match result {
                 Ok( processed_whole_frame ) => {
                     if processed_whole_frame {
@@ -370,7 +364,7 @@ impl PinkyWeb {
     }
 
     fn draw( &mut self ) {
-        let framebuffer = self.state.framebuffer();
+        let framebuffer = &self.state.framebuffer;
         if !self.paused {
             for (pixel_in, pixel_out) in framebuffer.iter().zip( self.framebuffer.iter_mut() ) {
                 *pixel_out = self.palette[ pixel_in.color_in_system_palette_index() as usize ];
@@ -424,8 +418,12 @@ impl PinkyWeb {
             _ => return false
         };
 
-        nes::Interface::set_button_state( self, nes::ControllerPort::First, button, is_pressed );
+        PinkyWeb::set_button_state( self, nes::ControllerPort::First, button, is_pressed );
         return true;
+    }
+    
+    fn set_button_state( &mut self, _port: nes::ControllerPort, _button: nes::Button::Ty, _is_pressed: bool ) {
+        //TODO 
     }
 }
 
@@ -496,21 +494,6 @@ fn support_input( pinky: Rc< RefCell< PinkyWeb > > ) {
     }));
 }
 
-fn load_rom( pinky: &Rc< RefCell< PinkyWeb > >, rom_data: &[u8] ) {
-    hide( "loading" );
-    hide( "error" );
-
-    let mut pinky = pinky.borrow_mut();
-    let pinky = pinky.deref_mut();
-    if let Err( err ) = nes::Interface::load_rom_from_memory( pinky, rom_data ) {
-        handle_error( err );
-        return;
-    }
-    pinky.unpause();
-
-    show( "viewport" );
-}
-
 fn handle_error< E: Into< Box< Error > > >( error: E ) {
     let error_message = format!( "{}", error.into() );
     web::document().get_element_by_id( "error-description" ).unwrap().set_text_content( &error_message );
@@ -531,20 +514,18 @@ fn main() {
     support_input( pinky.clone() );
 
     hide( "side-text" );
+    hide( "loading" );
+    hide( "error" );
 
-    let builtin_rom_loaded = Once( enclose!( [pinky] move |array_buffer: ArrayBuffer| {
-        let rom_data: Vec< u8 > = array_buffer.into();
-        load_rom( &pinky, &rom_data );
-    }));
-    js! {
-        var req = new XMLHttpRequest();
-        req.addEventListener( "load" , function() {
-            @{builtin_rom_loaded}( req.response );
-        });
-        req.open( "GET", "roms/mad_wizard.nes" );
-        req.responseType = "arraybuffer";
-        req.send();
-    }
+    {
+       let mut pinky = pinky.borrow_mut();
+       let pinky = pinky.deref_mut();
+
+        pinky.unpause();
+   }
+
+    show( "viewport" );
+
     
     web::window().request_animation_frame( move |_| {
         main_loop( pinky );
