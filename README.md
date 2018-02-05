@@ -1,3 +1,5 @@
+This is a fork of https://github.com/koute/pinky which I (Ryan1729) have "stripped for parts" in order to make a template for further wasm with Rust projects.
+
 ### Building (using Rust's native WebAssembly backend)
 
 1. Install newest nightly Rust:
